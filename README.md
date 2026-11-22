@@ -1,92 +1,72 @@
-### Advanced Marketing ML Pipeline
+# Advanced Marketing ML Pipeline
 
-This repository contains a sophisticated marketing analysis pipeline, leveraging advanced machine learning techniques and a robust data processing framework. Designed to facilitate end-to-end analysis, it is ideal for extracting actionable insights and optimizing marketing strategies.
+Pipeline de machine learning para marketing em um único script Python (`enhanced-ml-pipeline.py`).
 
----
+> **Atenção: os dados são sintéticos.** O script gera um dataset simulado (`np.random`, semente 42) de leads com
+> features demográficas, comportamentais e financeiras. Não há leitura de dados reais; as métricas impressas servem
+> apenas para demonstrar o fluxo.
 
-#### Key Features
+## O que o código faz
 
-1. **Data Generation and Validation:**
-   - Creates synthetic datasets with behavioral, financial, and demographic features.
-   - Includes rigorous validation checks to ensure data integrity.
+1. **Geração e validação de dados** (`criar_dados_avancados`): dataset sintético, validação (nulos, faixas de idade e
+   valor) e recorte de outliers por IQR nas colunas numéricas (exceto o alvo `converteu`).
+2. **Pré-processamento** (`preprocessar_dados`): `RobustScaler` nas numéricas, `OneHotEncoder` nas categóricas e
+   features temporais (hora, dia da semana, mês).
+3. **Modelos** (`treinar_modelos`):
+   - classificação de conversão com XGBoost + SMOTE, hiperparâmetros por `GridSearchCV` (F1, 5 folds);
+   - regressão de `valor_interesse` com `GradientBoostingRegressor`;
+   - segmentação com KMeans (k=4) e silhouette score.
+4. **Avaliação** (`avaliar_modelo`): F1 por validação cruzada (5 folds) e importância das features do classificador.
+5. **Rastreamento com MLflow**: métricas e modelos registrados localmente.
 
-2. **Data Preprocessing:**
-   - Handles outliers using the IQR method.
-   - Scales numeric data and encodes categorical variables with a robust preprocessing pipeline.
+Não existe dashboard Streamlit nem visualizações Plotly neste repositório (versões anteriores do README citavam isso).
 
-3. **Machine Learning Models:**
-   - Classification with XGBoost for customer conversion prediction.
-   - Regression using Gradient Boosting for revenue estimation.
-   - Hyperparameter optimization via GridSearchCV.
+## Requisitos
 
-4. **Clustering and Segmentation:**
-   - Customer segmentation using KMeans clustering.
-   - Computes silhouette scores to validate segmentation quality.
+- Python 3.10+ (testado com 3.12)
+- Dependências em `requirements.txt` (versões fixadas e testadas)
 
-5. **Evaluation Metrics:**
-   - Generates detailed classification reports and calculates Mean Squared Error (MSE).
-   - Cross-validation ensures robust model performance.
+## Instalação
 
-6. **Interactive Visualizations:**
-   - Integrates Plotly for dynamic data visualizations.
-   - Designed for use with Streamlit, enabling user-friendly dashboards.
-
-7. **Model Automation and Logging:**
-   - Tracks experiments, metrics, and model versions with MLflow.
-   - Ensures reproducibility and efficient model management.
-
----
-
-#### Requirements
-
-- Python 3.8 or later
-- Libraries: pandas, numpy, scikit-learn, xgboost, imbalanced-learn, plotly, streamlit, MLflow
-
-Install dependencies with:
 ```bash
-pip install -r requirements.txt
+python -m venv .venv
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
+pip install -r requirements.txt          # execução
+pip install -r requirements-dev.txt      # execução + testes/lint
 ```
 
----
+## Execução
 
-#### Usage
+```bash
+python enhanced-ml-pipeline.py
+```
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/Lelolima/marketing-ml-pipeline.git
-   cd marketing-ml-pipeline
-   ```
+Imprime acurácia, MSE, silhouette, F1 médio de validação cruzada e as 10 features mais importantes. Gera
+`marketing_ml.log` e os registros do MLflow no diretório atual.
 
-2. Run the pipeline:
-   ```bash
-   streamlit run enhanced-ml-pipeline.py
-   ```
+### Variáveis de ambiente (opcionais)
 
-3. Explore the dashboard for insights and visualizations.
+| Variável | Uso | Padrão |
+|---|---|---|
+| `MLFLOW_TRACKING_URI` | Onde o MLflow grava runs e modelos | padrão do MLflow (`sqlite:///mlflow.db` no MLflow 3) |
 
----
+Não há segredos nem chaves de API; por isso não há `.env.example`.
 
-#### File Structure
+## Testes e lint
 
-- `enhanced-ml-pipeline.py`: Main pipeline implementation.
-- `marketing_ml.log`: Logs for monitoring and debugging.
-- `README.md`: Project documentation.
+```bash
+ruff check .
+pytest -q tests
+```
 
----
+Os testes executam o pipeline ponta a ponta com amostra reduzida (MLflow em SQLite temporário). O CI
+(`.github/workflows/ci.yml`) roda lint, compilação e testes em cada push/PR.
 
-#### Contributions
+## Relação com outros repositórios
 
-Contributions are welcome! Please fork the repository and submit a pull request.
+O repositório `Marketing-Analytics` trata do mesmo domínio (leads de cursos, perfis "Transição de carreira",
+"Estudante" etc.) com uma pipeline ETL mais simples. Os projetos se sobrepõem, mas são independentes.
 
----
+## Licença
 
-#### License
-
-This project is licensed under the MIT License.
-
----
-
-#### Acknowledgments
-
-Special thanks to the open-source community and the maintainers of libraries used in this project.
-
+O README original declarava MIT, mas não há arquivo `LICENSE` no repositório.

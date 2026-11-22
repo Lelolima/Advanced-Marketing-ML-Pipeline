@@ -1,29 +1,33 @@
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import train_test_split, cross_val_score, KFold
-from sklearn.preprocessing import StandardScaler, LabelEncoder, RobustScaler
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingRegressor
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.preprocessing import RobustScaler
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.base import clone
 from sklearn.cluster import KMeans
 from sklearn.metrics import classification_report, mean_squared_error, silhouette_score
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.model_selection import GridSearchCV
-from sklearn.exceptions import NotFittedError
 import xgboost as xgb
-from datetime import datetime, timedelta
-import streamlit as st
-import plotly.express as px
-import plotly.graph_objects as go
+from datetime import datetime
 from imblearn.over_sampling import SMOTE
 from imblearn.pipeline import Pipeline as ImbPipeline
 import mlflow
 import mlflow.sklearn
 import logging
-import joblib
-from typing import Dict, Tuple, Any, List
+from typing import Dict, Tuple
 import warnings
 warnings.filterwarnings('ignore')
+
+TRUSTED_MODEL_TYPES = [
+    'imblearn.over_sampling._smote.base.SMOTE',
+    'imblearn.pipeline.Pipeline',
+    'xgboost.core.Booster',
+    'xgboost.sklearn.XGBClassifier',
+    'sklearn.tree._tree.Tree',
+]
 
 class EnhancedMarketingML:
     def __init__(self, log_path: str = 'marketing_ml.log'):
@@ -75,7 +79,8 @@ class EnhancedMarketingML:
         Trata outliers usando IQR
         """
         df_clean = df.copy()
-        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        # o alvo binário não deve ser recortado como outlier
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.drop('converteu', errors='ignore')
         
         for col in numeric_cols:
             Q1 = df[col].quantile(0.25)
@@ -115,7 +120,7 @@ class EnhancedMarketingML:
         """
         Gera as features base do dataset
         """
-        dates = pd.date_range(end=datetime.now(), periods=n_samples, freq='H')
+        dates = pd.date_range(end=datetime.now(), periods=n_samples, freq='h')
         
         return {
             'data': dates,
@@ -126,7 +131,8 @@ class EnhancedMarketingML:
             'idade': np.clip(np.concatenate([
                 np.random.normal(30, 3, int(n_samples * 0.6)),
                 np.random.normal(20, 2, int(n_samples * 0.2)),
-                np.random.normal(45, 5, int(n_samples * 0.2))
+                # restante garante exatamente n_samples linhas para qualquer n
+                np.random.normal(45, 5, n_samples - int(n_samples * 0.6) - int(n_samples * 0.2))
             ]), 18, 55).astype(int),
             'recursos_disponiveis': np.random.choice([True, False], n_samples, p=[0.3, 0.7]),
             'forma_pagamento': np.random.choice(['PIX', 'Cartão de Crédito'], n_samples, p=[0.6, 0.4]),
@@ -226,7 +232,7 @@ class EnhancedMarketingML:
         ])
         
         categorical_transformer = Pipeline([
-            ('onehot', OneHotEncoder(drop='first', sparse=False, handle_unknown='ignore'))
+            ('onehot', OneHotEncoder(drop='first', sparse_output=False, handle_unknown='ignore'))
         ])
         
         preprocessor = ColumnTransformer(
@@ -282,8 +288,14 @@ class EnhancedMarketingML:
         ])
         
         # Pipeline de valor
+        # O alvo da regressão (valor_interesse) não pode ser feature dela mesma (vazamento de dados)
+        value_preprocessor = clone(preprocessor)
+        value_preprocessor.transformers = [
+            (nome, transf, [c for c in cols if c != 'valor_interesse'])
+            for nome, transf, cols in value_preprocessor.transformers
+        ]
         value_pipeline = Pipeline([
-            ('preprocessor', preprocessor),
+            ('preprocessor', value_preprocessor),
             ('regressor', GradientBoostingRegressor())
         ])
         
@@ -311,8 +323,12 @@ class EnhancedMarketingML:
             })
             
             # Log modelos
-            mlflow.sklearn.log_model(best_conversion_model, "conversion_model")
-            mlflow.sklearn.log_model(value_pipeline, "value_model")
+            mlflow.sklearn.log_model(
+                best_conversion_model, name="conversion_model",
+                # tipos gerados por este próprio pipeline (MLflow >= 3 serializa via skops)
+                skops_trusted_types=TRUSTED_MODEL_TYPES,
+            )
+            mlflow.sklearn.log_model(value_pipeline, name="value_model", skops_trusted_types=TRUSTED_MODEL_TYPES)
         
         self.models['conversion'] = best_conversion_model
         self.models['value'] = value_pipeline
@@ -344,6 +360,38 @@ class EnhancedMarketingML:
             scoring='f1'
         )
         
-        # Feature importance
+        # Feature importance (do classificador já treinado)
+        modelo = self.models['conversion']
+        nomes = modelo.named_steps['preprocessor'].get_feature_names_out()
+        importancias = modelo.named_steps['classifier'].feature_importances_
         feature_importance = pd.DataFrame({
-            'feature': self.models['conversion'].
+            'feature': nomes,
+            'importance': importancias
+        }).sort_values('importance', ascending=False).reset_index(drop=True)
+        self.feature_importance = feature_importance
+
+        resultado = {
+            'cv_f1_mean': float(cv_scores.mean()),
+            'cv_f1_std': float(cv_scores.std()),
+            'feature_importance': feature_importance
+        }
+        self.metrics_history.append({k: v for k, v in resultado.items() if k != 'feature_importance'})
+        self.logger.info(f"Avaliação concluída: F1 médio (CV) = {resultado['cv_f1_mean']:.4f}")
+        return resultado
+
+
+def main(n_samples: int = 1000) -> None:
+    ml = EnhancedMarketingML()
+    ml.criar_dados_avancados(n_samples)
+    metricas = ml.treinar_modelos()
+    avaliacao = ml.avaliar_modelo()
+    print(f"Acurácia (teste): {metricas['conversion_metrics']['accuracy']:.4f}")
+    print(f"MSE valor_interesse: {metricas['value_prediction_mse']:.2f}")
+    print(f"Silhouette (KMeans k=4): {metricas['silhouette_score']:.4f}")
+    print(f"F1 médio CV: {avaliacao['cv_f1_mean']:.4f} (+/- {avaliacao['cv_f1_std']:.4f})")
+    print("Top 10 features:")
+    print(avaliacao['feature_importance'].head(10).to_string(index=False))
+
+
+if __name__ == '__main__':
+    main()
